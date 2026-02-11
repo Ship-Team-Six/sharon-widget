@@ -287,8 +287,47 @@ const CHAT_ANIMATIONS = [
   },
 ];
 
+// ── Animation Helpers ──
+function lerp(start, end, t) {
+  return start + (end - start) * t;
+}
+
+function easeInOutCubic(t) {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
 function startIdleAnimation() {
-  // Nothing special needed — update loop handles it
+  // Initialize with random idle
+  animationState.currentIdleIndex = Math.floor(Math.random() * IDLE_ANIMATIONS.length);
+  animationState.idleTimer = 0;
+  animationState.state = ANIMATION_STATE.IDLE;
+  console.log('🎭 Animation system started with:', IDLE_ANIMATIONS[animationState.currentIdleIndex].name);
+}
+
+function pickNextIdle() {
+  // Pick different from current
+  let next;
+  do {
+    next = Math.floor(Math.random() * IDLE_ANIMATIONS.length);
+  } while (next === animationState.currentIdleIndex && IDLE_ANIMATIONS.length > 1);
+  
+  animationState.currentIdleIndex = next;
+  animationState.idleTimer = 0;
+  console.log('Switched to idle animation:', IDLE_ANIMATIONS[next].name);
+}
+
+function triggerChatAnimation() {
+  animationState.state = ANIMATION_STATE.CHAT;
+  animationState.currentChatIndex = Math.floor(Math.random() * CHAT_ANIMATIONS.length);
+  animationState.chatTimer = 0;
+  animationState.chatBlend = 0;
+  console.log('Triggered chat animation:', CHAT_ANIMATIONS[animationState.currentChatIndex].name);
+}
+
+function endChatAnimation() {
+  animationState.state = ANIMATION_STATE.IDLE;
+  animationState.chatBlend = 0;
+  animationState.idleTimer = 0; // Reset idle timer to prevent immediate switch
 }
 
 // ── Animation Update Functions ──
@@ -309,7 +348,7 @@ function updateIdleAnimation(delta) {
       nextIndex = Math.floor(Math.random() * IDLE_ANIMATIONS.length);
     } while (nextIndex === state.currentIdleIndex && IDLE_ANIMATIONS.length > 1);
     state.currentIdleIndex = nextIndex;
-    console.log('Switched to idle animation:', IDLE_ANIMATIONS[nextIndex].name);
+    console.log('🎭 Switched to idle animation:', IDLE_ANIMATIONS[nextIndex].name);
   }
   
   // Get current idle animation

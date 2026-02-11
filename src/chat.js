@@ -235,15 +235,18 @@ export async function sendMessage(userMessage, onStatus) {
 
   onStatus?.('speaking');
 
-  // 3. Generate and play speech
+  // 3. Generate and play speech — SHARON'S VOICE ONLY
   try {
-    console.log('Generating speech for:', japaneseText);
+    console.log('Generating Sharon voice for:', japaneseText);
     const audioBuffer = await generateSpeech(japaneseText, 'Japanese');
-    console.log('Audio buffer received, playing...');
+    console.log('Sharon audio buffer received, playing...');
     await playAudio(audioBuffer);
     console.log('Playback complete');
   } catch (e) {
-    console.warn('TTS failed, showing text only:', e);
+    // HARD RULE: Never fall back to system TTS. Sharon's voice only.
+    console.error('SHARON TTS FAILED:', e);
+    // Show error in UI instead of using other voice
+    throw new Error(`Sharon's voice is unavailable. Please check the TTS server at localhost:8791`);
   }
 
   onStatus?.('idle');
