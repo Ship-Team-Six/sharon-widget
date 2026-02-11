@@ -77,7 +77,13 @@ loader.load(
   }
 );
 
-// ── Idle Animation System ──
+// ── Animation System ──
+const ANIMATION_STATE = {
+  IDLE: 'idle',
+  CHAT: 'chat',
+  TRANSITION: 'transition'
+};
+
 let animationState = {
   breathPhase: 0,
   blinkTimer: 0,
@@ -90,86 +96,307 @@ let animationState = {
   nextExpressionTime: 5 + Math.random() * 10,
   currentExpression: null,
   expressionWeight: 0,
-  expressionFadeDir: 0, // -1 fading out, 0 none, 1 fading in
+  expressionFadeDir: 0,
+  
+  // Animation cycling
+  state: ANIMATION_STATE.IDLE,
+  currentIdleIndex: 0,
+  idleTimer: 0,
+  idleDuration: 15, // seconds per idle animation
+  currentChatIndex: 0,
+  chatTimer: 0,
+  transitionProgress: 0,
+  isTransitioning: false,
+  
+  // Animation blend values
+  idleBlend: 1,
+  chatBlend: 0,
 };
+
+// ── Idle Animation Definitions ──
+// Each returns pose offsets for bones
+const IDLE_ANIMATIONS = [
+  // 1. Gentle Sway - relaxed standing with subtle hip movement
+  {
+    name: 'gentleSway',
+    update: (delta, phase) => ({
+      hipsRotY: Math.sin(phase * 0.5) * 0.015,
+      hipsRotZ: Math.sin(phase * 0.3) * 0.008,
+      spineRotX: Math.sin(phase * 0.7) * 0.01,
+      leftArmRotZ: -1.2 + Math.sin(phase * 0.4) * 0.03,
+      rightArmRotZ: 1.2 - Math.sin(phase * 0.4) * 0.03,
+      headRotY: Math.sin(phase * 0.3) * 0.04,
+      headRotX: Math.sin(phase * 0.5) * 0.02,
+    })
+  },
+  // 2. Thoughtful Tilt - head tilts as if thinking
+  {
+    name: 'thoughtfulTilt',
+    update: (delta, phase) => ({
+      hipsRotY: Math.sin(phase * 0.2) * 0.005,
+      hipsRotZ: 0,
+      spineRotX: 0.02 + Math.sin(phase * 0.4) * 0.015,
+      leftArmRotZ: -1.15 + Math.sin(phase * 0.3) * 0.02,
+      rightArmRotZ: 1.15,
+      headRotY: Math.sin(phase * 0.25) * 0.12,
+      headRotX: -0.05 + Math.sin(phase * 0.35) * 0.04,
+      headRotZ: Math.sin(phase * 0.2) * 0.08,
+    })
+  },
+  // 3. Weight Shift - shifting weight from foot to foot
+  {
+    name: 'weightShift',
+    update: (delta, phase) => ({
+      hipsPosY: Math.sin(phase * 1.5) * 0.008,
+      hipsRotY: Math.sin(phase * 0.8) * 0.025,
+      hipsRotZ: Math.sin(phase) * 0.012,
+      spineRotX: Math.sin(phase * 0.6) * 0.008,
+      leftArmRotZ: -1.25 + Math.sin(phase * 0.5) * 0.04,
+      rightArmRotZ: 1.25 - Math.sin(phase * 0.5) * 0.04,
+      headRotY: Math.sin(phase * 0.4) * 0.03,
+    })
+  },
+  // 4. Confident Pose - stronger stance with subtle chest expansion
+  {
+    name: 'confidentPose',
+    update: (delta, phase) => ({
+      hipsRotY: Math.sin(phase * 0.3) * 0.01,
+      hipsRotZ: Math.sin(phase * 0.25) * 0.005,
+      spineRotX: -0.015 + Math.sin(phase * 0.5) * 0.012,
+      chestRotX: Math.sin(phase * 0.8) * 0.02,
+      leftArmRotZ: -1.1 + Math.sin(phase * 0.35) * 0.025,
+      rightArmRotZ: 1.1 - Math.sin(phase * 0.35) * 0.025,
+      leftArmRotX: Math.sin(phase * 0.4) * 0.015,
+      rightArmRotX: Math.sin(phase * 0.4) * 0.015,
+      headRotY: Math.sin(phase * 0.2) * 0.025,
+      headRotX: -0.02,
+    })
+  },
+  // 5. Playful Bounce - light energetic micro-movements
+  {
+    name: 'playfulBounce',
+    update: (delta, phase) => ({
+      hipsPosY: Math.abs(Math.sin(phase * 2)) * 0.006,
+      hipsRotY: Math.sin(phase * 0.9) * 0.018,
+      hipsRotZ: Math.sin(phase * 0.7) * 0.01,
+      spineRotX: Math.sin(phase * 1.2) * 0.015,
+      leftArmRotZ: -1.18 + Math.sin(phase * 0.8) * 0.035,
+      rightArmRotZ: 1.18 - Math.sin(phase * 0.6) * 0.035,
+      leftLowerArmRot: 0.1 + Math.sin(phase) * 0.05,
+      rightLowerArmRot: -0.1 - Math.sin(phase) * 0.05,
+      headRotY: Math.sin(phase * 0.85) * 0.05,
+      headRotX: Math.sin(phase * 1.1) * 0.025,
+    })
+  },
+];
+
+// ── Chat Animation Definitions ──
+// Triggered when user sends a message
+const CHAT_ANIMATIONS = [
+  // 1. Engaged Lean - leans forward attentively
+  {
+    name: 'engagedLean',
+    duration: 3,
+    update: (progress) => {
+      const ease = 1 - Math.pow(1 - progress, 3);
+      return {
+        hipsPosY: 0,
+        hipsRotX: 0.08 * ease,
+        spineRotX: 0.12 * ease,
+        chestRotX: 0.05 * ease,
+        headRotX: -0.15 * ease,
+        headRotY: 0,
+        leftArmRotZ: -1.0,
+        rightArmRotZ: 1.0,
+      };
+    }
+  },
+  // 2. Thoughtful Chin - hand-to-chin gesture simulation
+  {
+    name: 'thoughtfulChin',
+    duration: 4,
+    update: (progress) => {
+      const ease = progress < 0.2 ? progress / 0.2 : (progress > 0.8 ? (1 - progress) / 0.2 : 1);
+      return {
+        hipsPosY: 0,
+        hipsRotY: -0.05 * ease,
+        spineRotX: 0.05 * ease,
+        headRotY: 0.1 * ease,
+        headRotX: 0.08 * ease,
+        headRotZ: -0.05 * ease,
+        leftArmRotZ: -0.8 * ease,
+        leftArmRotX: -0.3 * ease,
+        rightArmRotZ: 1.15,
+      };
+    }
+  },
+  // 3. Enthusiastic Response - slight bounce with raised energy
+  {
+    name: 'enthusiastic',
+    duration: 2.5,
+    update: (progress) => {
+      const bounce = Math.sin(progress * Math.PI * 2) * 0.5 + 0.5;
+      return {
+        hipsPosY: 0.015 * bounce,
+        hipsRotY: 0,
+        spineRotX: -0.03 * bounce,
+        chestRotX: 0.03 * bounce,
+        headRotX: -0.05 * bounce,
+        leftArmRotZ: -1.05 - 0.1 * bounce,
+        rightArmRotZ: 1.05 + 0.1 * bounce,
+      };
+    }
+  },
+  // 4. Curious Tilt - questioning head tilt
+  {
+    name: 'curiousTilt',
+    duration: 3.5,
+    update: (progress) => {
+      const ease = progress < 0.15 ? progress / 0.15 : (progress > 0.85 ? (1 - progress) / 0.15 : 1);
+      return {
+        hipsPosY: 0,
+        hipsRotY: 0.03 * ease,
+        spineRotX: 0,
+        headRotY: -0.08 * ease,
+        headRotX: 0.05 * ease,
+        headRotZ: 0.12 * ease,
+        leftArmRotZ: -1.2,
+        rightArmRotZ: 1.1,
+      };
+    }
+  },
+  // 5. Warm Open - welcoming open posture
+  {
+    name: 'warmOpen',
+    duration: 3,
+    update: (progress) => {
+      const ease = 1 - Math.pow(1 - progress, 2);
+      return {
+        hipsPosY: 0,
+        hipsRotY: 0,
+        spineRotX: -0.02 * ease,
+        chestRotX: 0.04 * ease,
+        headRotX: -0.08 * ease,
+        headRotY: 0,
+        leftArmRotZ: -1.05 - 0.08 * ease,
+        rightArmRotZ: 1.05 + 0.08 * ease,
+        leftArmRotX: 0.05 * ease,
+        rightArmRotX: 0.05 * ease,
+      };
+    }
+  },
+];
 
 function startIdleAnimation() {
   // Nothing special needed — update loop handles it
 }
 
+// ── Animation Update Functions ──
+
 function updateIdleAnimation(delta) {
   if (!vrm) return;
 
   const state = animationState;
-
-  // ── Breathing ──
+  
+  // ── Idle Animation Cycling ──
+  // Cycle to next idle animation every 15 seconds
+  state.idleTimer += delta;
+  if (state.idleTimer >= state.idleDuration && state.state === ANIMATION_STATE.IDLE) {
+    state.idleTimer = 0;
+    // Pick random next idle (different from current)
+    let nextIndex;
+    do {
+      nextIndex = Math.floor(Math.random() * IDLE_ANIMATIONS.length);
+    } while (nextIndex === state.currentIdleIndex && IDLE_ANIMATIONS.length > 1);
+    state.currentIdleIndex = nextIndex;
+    console.log('Switched to idle animation:', IDLE_ANIMATIONS[nextIndex].name);
+  }
+  
+  // Get current idle animation
+  const idleAnim = IDLE_ANIMATIONS[state.currentIdleIndex];
+  const idlePhase = state.bodySwayPhase + state.idleTimer;
+  const idlePose = idleAnim.update(delta, idlePhase);
+  
+  // ── Breathing (always active, layered on top) ──
   state.breathPhase += delta * 1.2;
   const breathValue = Math.sin(state.breathPhase) * 0.003;
   
-  const spine = vrm.humanoid?.getNormalizedBoneNode('spine');
-  if (spine) {
-    spine.position.y += breathValue;
-  }
-  
-  const chest = vrm.humanoid?.getNormalizedBoneNode('chest');
-  if (chest) {
-    chest.rotation.x = Math.sin(state.breathPhase) * 0.01;
-  }
-
   // ── Blinking ──
   state.blinkTimer += delta;
   if (!state.isBlinking && state.blinkTimer >= state.nextBlinkTime) {
     state.isBlinking = true;
     state.blinkProgress = 0;
-    // Sometimes double-blink
     state.nextBlinkTime = Math.random() < 0.3 ? 0.15 : (2 + Math.random() * 5);
     state.blinkTimer = 0;
   }
 
   if (state.isBlinking) {
-    state.blinkProgress += delta * 8; // blink speed
+    state.blinkProgress += delta * 8;
     let blinkWeight;
     if (state.blinkProgress < 0.5) {
-      // Closing
       blinkWeight = state.blinkProgress * 2;
     } else if (state.blinkProgress < 1.0) {
-      // Opening
       blinkWeight = 1.0 - (state.blinkProgress - 0.5) * 2;
     } else {
       blinkWeight = 0;
       state.isBlinking = false;
     }
-    
     if (vrm.expressionManager) {
       vrm.expressionManager.setValue('blink', blinkWeight);
     }
   }
 
-  // ── Head sway ──
-  state.headSwayPhase += delta * 0.3;
-  const head = vrm.humanoid?.getNormalizedBoneNode('head');
-  if (head) {
-    head.rotation.y = Math.sin(state.headSwayPhase) * 0.03;
-    head.rotation.x = Math.sin(state.headSwayPhase * 0.7) * 0.015;
-    head.rotation.z = Math.sin(state.headSwayPhase * 0.5) * 0.01;
-  }
-
-  // ── Subtle body sway ──
-  state.bodySwayPhase += delta * 0.15;
+  // ── Apply Idle Pose ──
   const hips = vrm.humanoid?.getNormalizedBoneNode('hips');
   if (hips) {
-    hips.rotation.z = Math.sin(state.bodySwayPhase) * 0.008;
-    hips.rotation.y = Math.sin(state.bodySwayPhase * 0.7) * 0.005;
+    hips.position.y = breathValue + (idlePose.hipsPosY || 0);
+    hips.rotation.y = idlePose.hipsRotY || 0;
+    hips.rotation.z = idlePose.hipsRotZ || 0;
+    hips.rotation.x = idlePose.hipsRotX || 0;
+  }
+  
+  const spine = vrm.humanoid?.getNormalizedBoneNode('spine');
+  if (spine) {
+    spine.rotation.x = (idlePose.spineRotX || 0) + Math.sin(state.breathPhase) * 0.01;
+  }
+  
+  const chest = vrm.humanoid?.getNormalizedBoneNode('chest');
+  if (chest && idlePose.chestRotX !== undefined) {
+    chest.rotation.x = idlePose.chestRotX;
+  }
+
+  const head = vrm.humanoid?.getNormalizedBoneNode('head');
+  if (head) {
+    head.rotation.y = idlePose.headRotY || 0;
+    head.rotation.x = idlePose.headRotX || 0;
+    head.rotation.z = idlePose.headRotZ || 0;
+  }
+
+  const leftUpperArm = vrm.humanoid?.getNormalizedBoneNode('leftUpperArm');
+  const rightUpperArm = vrm.humanoid?.getNormalizedBoneNode('rightUpperArm');
+  if (leftUpperArm) {
+    leftUpperArm.rotation.z = idlePose.leftArmRotZ || -1.2;
+    leftUpperArm.rotation.x = idlePose.leftArmRotX || 0;
+  }
+  if (rightUpperArm) {
+    rightUpperArm.rotation.z = idlePose.rightArmRotZ || 1.2;
+    rightUpperArm.rotation.x = idlePose.rightArmRotX || 0;
+  }
+  
+  const leftLowerArm = vrm.humanoid?.getNormalizedBoneNode('leftLowerArm');
+  const rightLowerArm = vrm.humanoid?.getNormalizedBoneNode('rightLowerArm');
+  if (leftLowerArm) {
+    leftLowerArm.rotation.z = idlePose.leftLowerArmRot !== undefined ? idlePose.leftLowerArmRot : 0.05;
+  }
+  if (rightLowerArm) {
+    rightLowerArm.rotation.z = idlePose.rightLowerArmRot !== undefined ? idlePose.rightLowerArmRot : -0.05;
   }
 
   // ── Occasional expressions ──
   state.expressionTimer += delta;
   if (state.expressionFadeDir === 0 && state.expressionTimer >= state.nextExpressionTime) {
-    // Pick a random subtle expression
     const expressions = ['happy', 'relaxed'];
-    const available = expressions.filter(e => 
-      vrm.expressionManager?.expressionMap?.[e]
-    );
+    const available = expressions.filter(e => vrm.expressionManager?.expressionMap?.[e]);
     if (available.length > 0) {
       state.currentExpression = available[Math.floor(Math.random() * available.length)];
       state.expressionFadeDir = 1;
@@ -182,9 +409,7 @@ function updateIdleAnimation(delta) {
   if (state.currentExpression && vrm.expressionManager) {
     if (state.expressionFadeDir === 1) {
       state.expressionWeight = Math.min(1, state.expressionWeight + delta * 0.8);
-      if (state.expressionWeight >= 0.4) {
-        state.expressionFadeDir = -1;
-      }
+      if (state.expressionWeight >= 0.4) state.expressionFadeDir = -1;
     } else if (state.expressionFadeDir === -1) {
       state.expressionWeight = Math.max(0, state.expressionWeight - delta * 0.5);
       if (state.expressionWeight <= 0) {
@@ -198,27 +423,100 @@ function updateIdleAnimation(delta) {
     }
   }
 
-  // ── Arm pose (slight relaxation from T-pose) ──
-  const leftUpperArm = vrm.humanoid?.getNormalizedBoneNode('leftUpperArm');
-  const rightUpperArm = vrm.humanoid?.getNormalizedBoneNode('rightUpperArm');
-  if (leftUpperArm) {
-    leftUpperArm.rotation.z = -1.2 + Math.sin(state.bodySwayPhase * 0.5) * 0.02;
-  }
-  if (rightUpperArm) {
-    rightUpperArm.rotation.z = 1.2 + Math.sin(state.bodySwayPhase * 0.5 + 1) * 0.02;
-  }
-  
-  const leftLowerArm = vrm.humanoid?.getNormalizedBoneNode('leftLowerArm');
-  const rightLowerArm = vrm.humanoid?.getNormalizedBoneNode('rightLowerArm');
-  if (leftLowerArm) {
-    leftLowerArm.rotation.z = 0.05;
-  }
-  if (rightLowerArm) {
-    rightLowerArm.rotation.z = -0.05;
-  }
+  // Update sway phases
+  state.bodySwayPhase += delta * 0.15;
+  state.headSwayPhase += delta * 0.3;
 
   // Update VRM
   vrm.update(delta);
+}
+
+// ── Chat Animation ──
+function triggerChatAnimation() {
+  const state = animationState;
+  state.state = ANIMATION_STATE.CHAT;
+  state.chatTimer = 0;
+  
+  // Pick random chat animation
+  let nextIndex;
+  do {
+    nextIndex = Math.floor(Math.random() * CHAT_ANIMATIONS.length);
+  } while (nextIndex === state.currentChatIndex && CHAT_ANIMATIONS.length > 1);
+  state.currentChatIndex = nextIndex;
+  
+  console.log('Chat animation triggered:', CHAT_ANIMATIONS[nextIndex].name);
+}
+
+function updateChatAnimation(delta) {
+  if (!vrm) return;
+  
+  const state = animationState;
+  const chatAnim = CHAT_ANIMATIONS[state.currentChatIndex];
+  
+  state.chatTimer += delta;
+  const progress = Math.min(1, state.chatTimer / chatAnim.duration);
+  const pose = chatAnim.update(progress);
+  
+  // Apply chat pose
+  const hips = vrm.humanoid?.getNormalizedBoneNode('hips');
+  if (hips) {
+    hips.position.y = pose.hipsPosY || 0;
+    hips.rotation.x = pose.hipsRotX || 0;
+    hips.rotation.y = pose.hipsRotY || 0;
+    hips.rotation.z = pose.hipsRotZ || 0;
+  }
+  
+  const spine = vrm.humanoid?.getNormalizedBoneNode('spine');
+  if (spine) {
+    spine.rotation.x = pose.spineRotX || 0;
+  }
+  
+  const chest = vrm.humanoid?.getNormalizedBoneNode('chest');
+  if (chest && pose.chestRotX !== undefined) {
+    chest.rotation.x = pose.chestRotX;
+  }
+  
+  const head = vrm.humanoid?.getNormalizedBoneNode('head');
+  if (head) {
+    head.rotation.x = pose.headRotX || 0;
+    head.rotation.y = pose.headRotY || 0;
+    head.rotation.z = pose.headRotZ || 0;
+  }
+  
+  const leftUpperArm = vrm.humanoid?.getNormalizedBoneNode('leftUpperArm');
+  const rightUpperArm = vrm.humanoid?.getNormalizedBoneNode('rightUpperArm');
+  if (leftUpperArm) {
+    leftUpperArm.rotation.z = pose.leftArmRotZ !== undefined ? pose.leftArmRotZ : -1.2;
+    leftUpperArm.rotation.x = pose.leftArmRotX || 0;
+  }
+  if (rightUpperArm) {
+    rightUpperArm.rotation.z = pose.rightArmRotZ !== undefined ? pose.rightArmRotZ : 1.2;
+  }
+  
+  // Continue breathing
+  state.breathPhase += delta * 1.2;
+  const breathValue = Math.sin(state.breathPhase) * 0.003;
+  if (hips) hips.position.y += breathValue;
+  
+  vrm.update(delta);
+  
+  // Return to idle when done
+  if (progress >= 1) {
+    state.state = ANIMATION_STATE.IDLE;
+    state.idleTimer = 0;
+    console.log('Chat animation complete, returning to idle');
+  }
+}
+
+// ── Main Animation Update ──
+function updateAnimation(delta) {
+  const state = animationState;
+  
+  if (state.state === ANIMATION_STATE.CHAT) {
+    updateChatAnimation(delta);
+  } else {
+    updateIdleAnimation(delta);
+  }
 }
 
 // ── Mouse tracking (look at cursor) ──
@@ -260,7 +558,7 @@ function animate(time) {
 
   const delta = Math.min(clock.getDelta(), 0.1); // cap delta to avoid jumps
 
-  updateIdleAnimation(delta);
+  updateAnimation(delta);
   updateLookAt(delta);
   updateLipSync();
 
@@ -399,6 +697,9 @@ function initChatUI() {
     isSending = true;
     sendBtn.disabled = true;
     input.value = '';
+
+    // Trigger chat animation when user sends message
+    triggerChatAnimation();
 
     addBubble(text, 'user');
     let statusBubble = addBubble('thinking...', 'status');
