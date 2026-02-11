@@ -316,19 +316,7 @@ function pickNextIdle() {
   console.log('Switched to idle animation:', IDLE_ANIMATIONS[next].name);
 }
 
-function triggerChatAnimation() {
-  animationState.state = ANIMATION_STATE.CHAT;
-  animationState.currentChatIndex = Math.floor(Math.random() * CHAT_ANIMATIONS.length);
-  animationState.chatTimer = 0;
-  animationState.chatBlend = 0;
-  console.log('Triggered chat animation:', CHAT_ANIMATIONS[animationState.currentChatIndex].name);
-}
-
-function endChatAnimation() {
-  animationState.state = ANIMATION_STATE.IDLE;
-  animationState.chatBlend = 0;
-  animationState.idleTimer = 0; // Reset idle timer to prevent immediate switch
-}
+// Note: triggerChatAnimation defined below in Chat Animation section
 
 // ── Animation Update Functions ──
 
