@@ -18,7 +18,7 @@ scene.background = null;
 
 const camera = new THREE.PerspectiveCamera(25, window.innerWidth / window.innerHeight, 0.1, 100);
 camera.position.set(0, 1.3, 4.5);
-camera.lookAt(0, 0.22, 0);
+camera.lookAt(0, 0.19, 0);
 
 // ── Lighting ──
 const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
@@ -67,14 +67,6 @@ let blinkTimer = 0, nextBlinkTime = 2 + Math.random() * 4;
 let isBlinking = false, blinkProgress = 0;
 let expressionTimer = 0, nextExpressionTime = 5 + Math.random() * 10;
 let currentExpression = null, expressionWeight = 0, expressionFadeDir = 0;
-
-// ── Twirl Animation State ──
-let isTwirling = false;
-let twirlTime = 0;
-const TWIRL_DURATION = 1.5; // seconds for 360 spin
-const TWIRL_RESET_DURATION = 0.5; // seconds to reset to neutral
-let twirlPhase = 'spin'; // 'spin' | 'reset'
-let preTwirlPose = null; // Store pose before twirl for smooth return
 
 // Pose definitions
 const POSES = {
@@ -131,16 +123,6 @@ function lerpPose(poseA, poseB, t) {
   return result;
 }
 
-// Trigger twirl animation
-function triggerTwirl() {
-  if (isTwirling) return;
-  isTwirling = true;
-  twirlTime = 0;
-  twirlPhase = 'spin';
-  // Reset loop to start from gentle sway after twirl
-  console.log('🎭 Twirl triggered!');
-}
-
 function updateOrganicIdle(delta) {
   if (!vrm) return;
   
@@ -152,94 +134,6 @@ function updateOrganicIdle(delta) {
   const rightUpperArm = vrm.humanoid?.getNormalizedBoneNode('rightUpperArm');
   const leftLowerArm = vrm.humanoid?.getNormalizedBoneNode('leftLowerArm');
   const rightLowerArm = vrm.humanoid?.getNormalizedBoneNode('rightLowerArm');
-  
-  // ── TWIRL ANIMATION ──
-  if (isTwirling) {
-    twirlTime += delta;
-    
-    if (twirlPhase === 'spin') {
-      // SPIN PHASE: Controlled 360° rotation over 1.5 seconds
-      const spinProgress = Math.min(1, twirlTime / TWIRL_DURATION);
-      // Ease out cubic for smooth deceleration
-      const ease = 1 - Math.pow(1 - spinProgress, 3);
-      
-      // Rotate entire model around Y axis via hips
-      if (hips) {
-        hips.rotation.y = ease * Math.PI * 2;
-        // Subtle hop during spin
-        hips.position.y = Math.sin(spinProgress * Math.PI) * 0.02;
-      }
-      
-      // Arms slightly out for balance (controlled, not ragdoll)
-      if (leftUpperArm) {
-        leftUpperArm.rotation.z = -1.3 + Math.sin(spinProgress * Math.PI * 2) * 0.1;
-        leftUpperArm.rotation.x = 0.1;
-      }
-      if (rightUpperArm) {
-        rightUpperArm.rotation.z = 1.3 - Math.sin(spinProgress * Math.PI * 2) * 0.1;
-        rightUpperArm.rotation.x = 0.1;
-      }
-      
-      // Keep head facing forward (counter-rotate slightly for focus)
-      if (head) {
-        head.rotation.y = -hips.rotation.y * 0.3; // Partial counter-rotation
-        head.rotation.x = 0;
-        head.rotation.z = 0;
-      }
-      
-      // Reset spine and chest to neutral during spin
-      if (spine) spine.rotation.x = 0;
-      if (chest) chest.rotation.x = Math.sin(spinProgress * Math.PI) * 0.02;
-      
-      if (spinProgress >= 1) {
-        twirlPhase = 'reset';
-        twirlTime = 0;
-        console.log('🎭 Twirl spin complete, resetting...');
-      }
-      
-    } else if (twirlPhase === 'reset') {
-      // RESET PHASE: Smoothly return ALL bones to zero/default over 0.5 seconds
-      const resetProgress = Math.min(1, twirlTime / TWIRL_RESET_DURATION);
-      const ease = 1 - Math.pow(1 - resetProgress, 3);
-      
-      // Reset hips rotation back to 0
-      if (hips) {
-        hips.rotation.y = (1 - ease) * Math.PI * 2;
-        hips.position.y = 0;
-        hips.rotation.z = 0;
-      }
-      
-      // Reset ALL bones to their default neutral positions
-      if (spine) spine.rotation.set(0, 0, 0);
-      if (chest) chest.rotation.set(0, 0, 0);
-      
-      // Head: fully reset
-      if (head) head.rotation.set(0, 0, 0);
-      
-      // Arms: return to relaxed T-pose
-      if (leftUpperArm) {
-        leftUpperArm.rotation.z = -1.2 * ease;
-        leftUpperArm.rotation.x = 0;
-      }
-      if (rightUpperArm) {
-        rightUpperArm.rotation.z = 1.2 * ease;
-        rightUpperArm.rotation.x = 0;
-      }
-      if (leftLowerArm) leftLowerArm.rotation.z = 0.05 * ease;
-      if (rightLowerArm) rightLowerArm.rotation.z = -0.05 * ease;
-      
-      if (resetProgress >= 1) {
-        // TWIRL COMPLETE: Reset everything and restart idle from beginning
-        isTwirling = false;
-        twirlPhase = 'spin';
-        loopTime = 0; // Reset idle loop to start (gentle sway)
-        console.log('🎭 Twirl complete, returning to idle!');
-      }
-    }
-    
-    vrm.update(delta);
-    return; // Skip idle animation during twirl
-  }
   
   // ── IDLE ANIMATION ──
   loopTime += delta;
@@ -383,46 +277,23 @@ async function positionBottomRight() {
 }
 positionBottomRight();
 
-// ── Drag and Click support ──
-// Tauri handles the actual window dragging - we just detect if it was a click or drag
-let mouseDownTime = 0;
-let hasMouseMoved = false;
-let mouseStartX = 0;
-let mouseStartY = 0;
-
-canvas.addEventListener('mousedown', (e) => {
+// ── Drag support ──
+canvas.addEventListener('mousedown', async (e) => {
   if (e.target.closest('#chat-container')) return;
-  mouseDownTime = Date.now();
-  hasMouseMoved = false;
-  mouseStartX = e.clientX;
-  mouseStartY = e.clientY;
-  
-  // Start Tauri drag - this blocks until mouseup in Tauri
   if (e.buttons === 1) {
-    import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
-      getCurrentWindow().startDragging();
-    }).catch(() => {});
+    try {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      await getCurrentWindow().startDragging();
+    } catch {}
   }
 });
 
-// Use window mouseup to catch release even if dragged
-window.addEventListener('mouseup', (e) => {
-  // Check if we should trigger twirl
-  const duration = Date.now() - mouseDownTime;
-  const distance = Math.sqrt(Math.pow(e.clientX - mouseStartX, 2) + Math.pow(e.clientY - mouseStartY, 2));
-  
-  // Quick click (short duration, minimal movement) = twirl
-  if (duration < 300 && distance < 10 && !isTwirling && !e.target.closest('#chat-container')) {
-    console.log('🎭 Click detected, triggering twirl!');
-    triggerTwirl();
-  }
-});
-
-document.getElementById('drag-region')?.addEventListener('mousedown', (e) => {
+document.getElementById('drag-region')?.addEventListener('mousedown', async (e) => {
   if (e.buttons === 1) {
-    import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
-      getCurrentWindow().startDragging();
-    }).catch(() => {});
+    try {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      await getCurrentWindow().startDragging();
+    } catch {}
   }
 });
 
