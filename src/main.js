@@ -68,6 +68,14 @@ let isBlinking = false, blinkProgress = 0;
 let expressionTimer = 0, nextExpressionTime = 5 + Math.random() * 10;
 let currentExpression = null, expressionWeight = 0, expressionFadeDir = 0;
 
+// ── Twirl Animation State ──
+let isTwirling = false;
+let twirlTime = 0;
+const TWIRL_DURATION = 1.5; // seconds for 360 spin
+const TWIRL_RESET_DURATION = 0.5; // seconds to reset to neutral
+let twirlPhase = 'spin'; // 'spin' | 'reset'
+let preTwirlPose = null; // Store pose before twirl for smooth return
+
 // Pose definitions
 const POSES = {
   gentleSway: (phase) => ({
@@ -123,16 +131,18 @@ function lerpPose(poseA, poseB, t) {
   return result;
 }
 
+// Trigger twirl animation
+function triggerTwirl() {
+  if (isTwirling) return;
+  isTwirling = true;
+  twirlTime = 0;
+  twirlPhase = 'spin';
+  // Reset loop to start from gentle sway after twirl
+  console.log('🎭 Twirl triggered!');
+}
+
 function updateOrganicIdle(delta) {
   if (!vrm) return;
-  
-  loopTime += delta;
-  
-  // Determine current phase (0-3) and position within phase
-  const totalLoop = PHASE_DURATION * 4;
-  const loopPosition = loopTime % totalLoop;
-  const phaseIndex = Math.floor(loopPosition / PHASE_DURATION);
-  const phaseProgress = (loopPosition % PHASE_DURATION) / PHASE_DURATION;
   
   const hips = vrm.humanoid?.getNormalizedBoneNode('hips');
   const spine = vrm.humanoid?.getNormalizedBoneNode('spine');
@@ -142,6 +152,103 @@ function updateOrganicIdle(delta) {
   const rightUpperArm = vrm.humanoid?.getNormalizedBoneNode('rightUpperArm');
   const leftLowerArm = vrm.humanoid?.getNormalizedBoneNode('leftLowerArm');
   const rightLowerArm = vrm.humanoid?.getNormalizedBoneNode('rightLowerArm');
+  
+  // ── TWIRL ANIMATION ──
+  if (isTwirling) {
+    twirlTime += delta;
+    
+    if (twirlPhase === 'spin') {
+      // SPIN PHASE: Controlled 360° rotation over 1.5 seconds
+      const spinProgress = Math.min(1, twirlTime / TWIRL_DURATION);
+      // Ease out cubic for smooth deceleration
+      const ease = 1 - Math.pow(1 - spinProgress, 3);
+      
+      // Rotate entire model around Y axis via hips
+      if (hips) {
+        hips.rotation.y = ease * Math.PI * 2;
+        // Subtle hop during spin
+        hips.position.y = Math.sin(spinProgress * Math.PI) * 0.02;
+      }
+      
+      // Arms slightly out for balance (controlled, not ragdoll)
+      if (leftUpperArm) {
+        leftUpperArm.rotation.z = -1.3 + Math.sin(spinProgress * Math.PI * 2) * 0.1;
+        leftUpperArm.rotation.x = 0.1;
+      }
+      if (rightUpperArm) {
+        rightUpperArm.rotation.z = 1.3 - Math.sin(spinProgress * Math.PI * 2) * 0.1;
+        rightUpperArm.rotation.x = 0.1;
+      }
+      
+      // Keep head facing forward (counter-rotate slightly for focus)
+      if (head) {
+        head.rotation.y = -hips.rotation.y * 0.3; // Partial counter-rotation
+        head.rotation.x = 0;
+        head.rotation.z = 0;
+      }
+      
+      // Reset spine and chest to neutral during spin
+      if (spine) spine.rotation.x = 0;
+      if (chest) chest.rotation.x = Math.sin(spinProgress * Math.PI) * 0.02;
+      
+      if (spinProgress >= 1) {
+        twirlPhase = 'reset';
+        twirlTime = 0;
+        console.log('🎭 Twirl spin complete, resetting...');
+      }
+      
+    } else if (twirlPhase === 'reset') {
+      // RESET PHASE: Smoothly return ALL bones to zero/default over 0.5 seconds
+      const resetProgress = Math.min(1, twirlTime / TWIRL_RESET_DURATION);
+      const ease = 1 - Math.pow(1 - resetProgress, 3);
+      
+      // Reset hips rotation back to 0
+      if (hips) {
+        hips.rotation.y = (1 - ease) * Math.PI * 2;
+        hips.position.y = 0;
+        hips.rotation.z = 0;
+      }
+      
+      // Reset ALL bones to their default neutral positions
+      if (spine) spine.rotation.set(0, 0, 0);
+      if (chest) chest.rotation.set(0, 0, 0);
+      
+      // Head: fully reset
+      if (head) head.rotation.set(0, 0, 0);
+      
+      // Arms: return to relaxed T-pose
+      if (leftUpperArm) {
+        leftUpperArm.rotation.z = -1.2 * ease;
+        leftUpperArm.rotation.x = 0;
+      }
+      if (rightUpperArm) {
+        rightUpperArm.rotation.z = 1.2 * ease;
+        rightUpperArm.rotation.x = 0;
+      }
+      if (leftLowerArm) leftLowerArm.rotation.z = 0.05 * ease;
+      if (rightLowerArm) rightLowerArm.rotation.z = -0.05 * ease;
+      
+      if (resetProgress >= 1) {
+        // TWIRL COMPLETE: Reset everything and restart idle from beginning
+        isTwirling = false;
+        twirlPhase = 'spin';
+        loopTime = 0; // Reset idle loop to start (gentle sway)
+        console.log('🎭 Twirl complete, returning to idle!');
+      }
+    }
+    
+    vrm.update(delta);
+    return; // Skip idle animation during twirl
+  }
+  
+  // ── IDLE ANIMATION ──
+  loopTime += delta;
+  
+  // Determine current phase (0-3) and position within phase
+  const totalLoop = PHASE_DURATION * 4;
+  const loopPosition = loopTime % totalLoop;
+  const phaseIndex = Math.floor(loopPosition / PHASE_DURATION);
+  const phaseProgress = (loopPosition % PHASE_DURATION) / PHASE_DURATION;
   
   // Calculate poses
   const phase = loopTime;
@@ -276,10 +383,16 @@ async function positionBottomRight() {
 }
 positionBottomRight();
 
-// ── Drag support ──
+// ── Drag and Click support ──
+let mouseDownTime = 0;
+let isDraggingWindow = false;
+
 canvas.addEventListener('mousedown', async (e) => {
   if (e.target.closest('#chat-container')) return;
+  mouseDownTime = Date.now();
+  isDraggingWindow = false;
   if (e.buttons === 1) {
+    isDraggingWindow = true;
     try {
       const { getCurrentWindow } = await import('@tauri-apps/api/window');
       await getCurrentWindow().startDragging();
@@ -287,8 +400,20 @@ canvas.addEventListener('mousedown', async (e) => {
   }
 });
 
+canvas.addEventListener('mouseup', (e) => {
+  if (e.target.closest('#chat-container')) return;
+  const clickDuration = Date.now() - mouseDownTime;
+  // If it was a quick click (not a drag), trigger twirl
+  if (clickDuration < 200 && !isTwirling) {
+    triggerTwirl();
+  }
+  isDraggingWindow = false;
+});
+
 document.getElementById('drag-region')?.addEventListener('mousedown', async (e) => {
   if (e.buttons === 1) {
+    mouseDownTime = Date.now();
+    isDraggingWindow = true;
     try {
       const { getCurrentWindow } = await import('@tauri-apps/api/window');
       await getCurrentWindow().startDragging();
