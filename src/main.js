@@ -384,40 +384,45 @@ async function positionBottomRight() {
 positionBottomRight();
 
 // ── Drag and Click support ──
+// Tauri handles the actual window dragging - we just detect if it was a click or drag
 let mouseDownTime = 0;
-let isDraggingWindow = false;
+let hasMouseMoved = false;
+let mouseStartX = 0;
+let mouseStartY = 0;
 
-canvas.addEventListener('mousedown', async (e) => {
+canvas.addEventListener('mousedown', (e) => {
   if (e.target.closest('#chat-container')) return;
   mouseDownTime = Date.now();
-  isDraggingWindow = false;
+  hasMouseMoved = false;
+  mouseStartX = e.clientX;
+  mouseStartY = e.clientY;
+  
+  // Start Tauri drag - this blocks until mouseup in Tauri
   if (e.buttons === 1) {
-    isDraggingWindow = true;
-    try {
-      const { getCurrentWindow } = await import('@tauri-apps/api/window');
-      await getCurrentWindow().startDragging();
-    } catch {}
+    import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
+      getCurrentWindow().startDragging();
+    }).catch(() => {});
   }
 });
 
-canvas.addEventListener('mouseup', (e) => {
-  if (e.target.closest('#chat-container')) return;
-  const clickDuration = Date.now() - mouseDownTime;
-  // If it was a quick click (not a drag), trigger twirl
-  if (clickDuration < 200 && !isTwirling) {
+// Use window mouseup to catch release even if dragged
+window.addEventListener('mouseup', (e) => {
+  // Check if we should trigger twirl
+  const duration = Date.now() - mouseDownTime;
+  const distance = Math.sqrt(Math.pow(e.clientX - mouseStartX, 2) + Math.pow(e.clientY - mouseStartY, 2));
+  
+  // Quick click (short duration, minimal movement) = twirl
+  if (duration < 300 && distance < 10 && !isTwirling && !e.target.closest('#chat-container')) {
+    console.log('🎭 Click detected, triggering twirl!');
     triggerTwirl();
   }
-  isDraggingWindow = false;
 });
 
-document.getElementById('drag-region')?.addEventListener('mousedown', async (e) => {
+document.getElementById('drag-region')?.addEventListener('mousedown', (e) => {
   if (e.buttons === 1) {
-    mouseDownTime = Date.now();
-    isDraggingWindow = true;
-    try {
-      const { getCurrentWindow } = await import('@tauri-apps/api/window');
-      await getCurrentWindow().startDragging();
-    } catch {}
+    import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
+      getCurrentWindow().startDragging();
+    }).catch(() => {});
   }
 });
 
