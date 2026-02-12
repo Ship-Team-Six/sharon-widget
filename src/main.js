@@ -19,7 +19,7 @@ scene.background = null;
 
 const camera = new THREE.PerspectiveCamera(25, window.innerWidth / window.innerHeight, 0.1, 100);
 camera.position.set(0, 1.3, 4.5);
-camera.lookAt(0, 0.9, 0);
+camera.lookAt(0, 0.22, 0); // Camera lookAt position (was 0.9 → 0.6 → 0.4 → 0.29)
 
 // ── Lighting ──
 const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
@@ -81,6 +81,7 @@ loader.load(
 const ANIMATION_STATE = {
   IDLE: 'idle',
   CHAT: 'chat',
+  TWIRL: 'twirl',
   TRANSITION: 'transition'
 };
 
@@ -102,7 +103,7 @@ let animationState = {
   state: ANIMATION_STATE.IDLE,
   currentIdleIndex: 0,
   idleTimer: 0,
-  idleDuration: 15, // seconds per idle animation
+  idleDuration: 10, // seconds per idle animation (was 15, then 6)
   currentChatIndex: 0,
   chatTimer: 0,
   transitionProgress: 0,
@@ -111,6 +112,34 @@ let animationState = {
   // Animation blend values
   idleBlend: 1,
   chatBlend: 0,
+  
+  // Twirl animation state
+  twirlTimer: 0,
+  twirlPhase: 'twirl', // 'twirl' | 'smile' | 'wink' | 'return'
+  twirlRotation: 0,
+  isBeingDragged: false,
+  wasDragged: false,
+  dragEndTimer: 0,
+};
+
+// ── Default Pose (neutral/rest position) ──
+// All animations blend from/to this state
+const DEFAULT_POSE = {
+  hipsPosY: 0,
+  hipsRotY: 0,
+  hipsRotZ: 0,
+  hipsRotX: 0,
+  spineRotX: 0,
+  chestRotX: 0,
+  leftArmRotZ: -1.2,
+  rightArmRotZ: 1.2,
+  leftArmRotX: 0,
+  rightArmRotX: 0,
+  leftLowerArmRot: 0.05,
+  rightLowerArmRot: -0.05,
+  headRotY: 0,
+  headRotX: 0,
+  headRotZ: 0,
 };
 
 // ── Idle Animation Definitions ──
@@ -342,7 +371,29 @@ function updateIdleAnimation(delta) {
   // Get current idle animation
   const idleAnim = IDLE_ANIMATIONS[state.currentIdleIndex];
   const idlePhase = state.bodySwayPhase + state.idleTimer;
-  const idlePose = idleAnim.update(delta, idlePhase);
+  const rawIdlePose = idleAnim.update(delta, idlePhase);
+  
+  // Smooth blending at start AND end of cycle for seamless transitions
+  const cycleProgress = state.idleTimer / state.idleDuration;
+  
+  // Blend FROM default at start (first 15%) AND TO default at end (last 15%)
+  let blendFactor = 0;
+  if (cycleProgress < 0.15) {
+    // Easing in from default pose
+    const t = cycleProgress / 0.15;
+    blendFactor = t * t * (3 - 2 * t); // smoothstep - more default at start
+  } else if (cycleProgress > 0.85) {
+    // Easing out to default pose
+    const t = (cycleProgress - 0.85) / 0.15;
+    blendFactor = 1 - t * t * (3 - 2 * t); // smoothstep - more default at end
+  }
+  
+  // Blend current pose with default pose
+  const idlePose = {};
+  for (const key of Object.keys(DEFAULT_POSE)) {
+    const animValue = rawIdlePose[key] !== undefined ? rawIdlePose[key] : DEFAULT_POSE[key];
+    idlePose[key] = animValue * (1 - blendFactor) + DEFAULT_POSE[key] * blendFactor;
+  }
   
   // ── Breathing (always active, layered on top) ──
   state.breathPhase += delta * 1.2;
@@ -535,11 +586,160 @@ function updateChatAnimation(delta) {
   }
 }
 
+// ── Twirl Animation ──
+function triggerTwirlAnimation() {
+  const state = animationState;
+  state.state = ANIMATION_STATE.TWIRL;
+  state.twirlTimer = 0;
+  state.twirlPhase = 'twirl';
+  state.twirlRotation = 0;
+  console.log('🎭 Twirl animation triggered!');
+}
+
+function updateTwirlAnimation(delta) {
+  if (!vrm) return;
+  
+  const state = animationState;
+  state.twirlTimer += delta;
+  
+  const hips = vrm.humanoid?.getNormalizedBoneNode('hips');
+  const head = vrm.humanoid?.getNormalizedBoneNode('head');
+  const leftUpperArm = vrm.humanoid?.getNormalizedBoneNode('leftUpperArm');
+  const rightUpperArm = vrm.humanoid?.getNormalizedBoneNode('rightUpperArm');
+  
+  // TWIRL PHASE (0-1.5s) - Full 360 spin with playful arm raise
+  if (state.twirlPhase === 'twirl') {
+    const twirlProgress = Math.min(1, state.twirlTimer / 1.5);
+    const ease = 1 - Math.pow(1 - twirlProgress, 3); // Ease out cubic
+    
+    // Full 360 rotation + extra for momentum feel
+    state.twirlRotation = ease * Math.PI * 2;
+    
+    if (hips) {
+      hips.rotation.y = state.twirlRotation;
+      // Slight hop during twirl
+      hips.position.y = Math.sin(twirlProgress * Math.PI) * 0.03;
+    }
+    
+    // Arms out for balance
+    if (leftUpperArm) {
+      leftUpperArm.rotation.z = -1.5 + Math.sin(twirlProgress * Math.PI * 2) * 0.2;
+    }
+    if (rightUpperArm) {
+      rightUpperArm.rotation.z = 1.5 - Math.sin(twirlProgress * Math.PI * 2) * 0.2;
+    }
+    
+    if (twirlProgress >= 1) {
+      state.twirlPhase = 'smile';
+      state.twirlTimer = 0;
+      console.log('🎭 Twirl complete, smiling...');
+    }
+  }
+  
+  // SMILE PHASE (0-0.8s) - Big smile expression
+  else if (state.twirlPhase === 'smile') {
+    const smileProgress = Math.min(1, state.twirlTimer / 0.8);
+    
+    // Big happy expression
+    if (vrm.expressionManager) {
+      vrm.expressionManager.setValue('happy', Math.sin(smileProgress * Math.PI) * 0.8);
+    }
+    
+    // Head tilt for cute factor
+    if (head) {
+      head.rotation.z = Math.sin(smileProgress * Math.PI) * 0.1;
+    }
+    
+    if (smileProgress >= 1) {
+      state.twirlPhase = 'wink';
+      state.twirlTimer = 0;
+      console.log('🎭 Smiling, now winking...');
+    }
+  }
+  
+  // WINK PHASE (0-0.6s) - Wink with one eye
+  else if (state.twirlPhase === 'wink') {
+    const winkProgress = Math.min(1, state.twirlTimer / 0.6);
+    
+    // Maintain smile
+    if (vrm.expressionManager) {
+      vrm.expressionManager.setValue('happy', 0.7);
+    }
+    
+    // Wink (blink left eye only - simulated with full blink for VRM standard)
+    if (winkProgress < 0.5) {
+      const winkWeight = winkProgress * 2;
+      if (vrm.expressionManager) {
+        vrm.expressionManager.setValue('blink', winkWeight * 0.7);
+      }
+    } else {
+      const winkWeight = (1 - winkProgress) * 2;
+      if (vrm.expressionManager) {
+        vrm.expressionManager.setValue('blink', winkWeight * 0.7);
+      }
+    }
+    
+    if (winkProgress >= 1) {
+      state.twirlPhase = 'return';
+      state.twirlTimer = 0;
+      console.log('🎭 Wink complete, returning to idle...');
+    }
+  }
+  
+  // RETURN PHASE (0-1.0s) - Blend back to default pose smoothly
+  else if (state.twirlPhase === 'return') {
+    const returnProgress = Math.min(1, state.twirlTimer / 1.0);
+    const ease = 1 - Math.pow(1 - returnProgress, 3);
+    
+    // Reset hips rotation back to 0
+    if (hips) {
+      hips.rotation.y = (1 - ease) * Math.PI * 2;
+      hips.position.y = ease * breathValue;
+    }
+    
+    // Reset arms to default
+    if (leftUpperArm) {
+      leftUpperArm.rotation.z = -1.2 * ease + (1 - ease) * (-1.5);
+    }
+    if (rightUpperArm) {
+      rightUpperArm.rotation.z = 1.2 * ease + (1 - ease) * 1.5;
+    }
+    
+    // Fade out expressions
+    if (vrm.expressionManager) {
+      vrm.expressionManager.setValue('happy', (1 - returnProgress) * 0.5);
+      vrm.expressionManager.setValue('blink', 0);
+    }
+    
+    // Reset head
+    if (head) {
+      head.rotation.z = (1 - ease) * 0.1;
+    }
+    
+    if (returnProgress >= 1) {
+      state.state = ANIMATION_STATE.IDLE;
+      state.twirlPhase = 'twirl';
+      state.twirlRotation = 0;
+      state.wasDragged = false;
+      state.idleTimer = 0;
+      console.log('🎭 Twirl sequence complete, back to idle!');
+    }
+  }
+  
+  // Breathing continues during twirl
+  state.breathPhase += delta * 1.2;
+  const breathValue = Math.sin(state.breathPhase) * 0.003;
+  
+  vrm.update(delta);
+}
+
 // ── Main Animation Update ──
 function updateAnimation(delta) {
   const state = animationState;
   
-  if (state.state === ANIMATION_STATE.CHAT) {
+  if (state.state === ANIMATION_STATE.TWIRL) {
+    updateTwirlAnimation(delta);
+  } else if (state.state === ANIMATION_STATE.CHAT) {
     updateChatAnimation(delta);
   } else {
     updateIdleAnimation(delta);
@@ -637,10 +837,17 @@ async function positionBottomRight() {
 positionBottomRight();
 
 // ── Drag support for Tauri — click anywhere on canvas to drag ──
+// Track drag state for twirl animation
+let dragStartTime = 0;
+let isDragging = false;
+
 canvas.addEventListener('mousedown', async (e) => {
   // Don't drag if clicking on chat area
   if (e.target.closest('#chat-container')) return;
   if (e.buttons === 1) {
+    dragStartTime = Date.now();
+    isDragging = true;
+    animationState.isBeingDragged = true;
     try {
       const { getCurrentWindow } = await import('@tauri-apps/api/window');
       await getCurrentWindow().startDragging();
@@ -648,9 +855,28 @@ canvas.addEventListener('mousedown', async (e) => {
   }
 });
 
+// Detect drag end and trigger twirl
+window.addEventListener('mouseup', () => {
+  if (isDragging) {
+    const dragDuration = Date.now() - dragStartTime;
+    isDragging = false;
+    animationState.isBeingDragged = false;
+    animationState.wasDragged = true;
+    animationState.dragEndTimer = 0;
+    
+    // Only trigger twirl if drag was significant (>100ms) and not currently twirling
+    if (dragDuration > 100 && animationState.state !== ANIMATION_STATE.TWIRL) {
+      triggerTwirlAnimation();
+    }
+  }
+});
+
 // Also keep the top drag region
 document.getElementById('drag-region')?.addEventListener('mousedown', async (e) => {
   if (e.buttons === 1) {
+    dragStartTime = Date.now();
+    isDragging = true;
+    animationState.isBeingDragged = true;
     try {
       const { getCurrentWindow } = await import('@tauri-apps/api/window');
       await getCurrentWindow().startDragging();
