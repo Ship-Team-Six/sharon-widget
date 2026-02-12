@@ -59,17 +59,80 @@ loader.load(
   (error) => console.error('Error loading VRM:', error)
 );
 
-// ── Simple Organic Idle Animation ──
-let organicIdleTime = 0;
+// ── Sequential Animation Loop ──
+// gentle sway → thoughtful tilt → confident pose → playful bounce → back to gentle sway
+let loopTime = 0;
+const PHASE_DURATION = 10; // 10 seconds per pose, 40 second total loop
 let blinkTimer = 0, nextBlinkTime = 2 + Math.random() * 4;
 let isBlinking = false, blinkProgress = 0;
 let expressionTimer = 0, nextExpressionTime = 5 + Math.random() * 10;
 let currentExpression = null, expressionWeight = 0, expressionFadeDir = 0;
 
+// Pose definitions
+const POSES = {
+  gentleSway: (phase) => ({
+    hipsRotY: Math.sin(phase * 0.5) * 0.015,
+    hipsRotZ: Math.sin(phase * 0.3) * 0.008,
+    spineRotX: Math.sin(phase * 0.7) * 0.01,
+    leftArmRotZ: -1.2 + Math.sin(phase * 0.4) * 0.03,
+    rightArmRotZ: 1.2 - Math.sin(phase * 0.4) * 0.03,
+    headRotY: Math.sin(phase * 0.3) * 0.04,
+    headRotX: Math.sin(phase * 0.5) * 0.02,
+    headRotZ: 0,
+  }),
+  thoughtfulTilt: (phase) => ({
+    hipsRotY: Math.sin(phase * 0.2) * 0.005,
+    hipsRotZ: 0,
+    spineRotX: 0.02 + Math.sin(phase * 0.4) * 0.015,
+    leftArmRotZ: -1.15 + Math.sin(phase * 0.3) * 0.02,
+    rightArmRotZ: 1.15,
+    headRotY: Math.sin(phase * 0.25) * 0.12,
+    headRotX: -0.05 + Math.sin(phase * 0.35) * 0.04,
+    headRotZ: Math.sin(phase * 0.2) * 0.08,
+  }),
+  confidentPose: (phase) => ({
+    hipsRotY: Math.sin(phase * 0.3) * 0.01,
+    hipsRotZ: Math.sin(phase * 0.25) * 0.005,
+    spineRotX: -0.015 + Math.sin(phase * 0.5) * 0.012,
+    leftArmRotZ: -1.1 + Math.sin(phase * 0.35) * 0.025,
+    rightArmRotZ: 1.1 - Math.sin(phase * 0.35) * 0.025,
+    headRotY: Math.sin(phase * 0.2) * 0.025,
+    headRotX: -0.02 + Math.sin(phase * 0.4) * 0.01,
+    headRotZ: 0,
+  }),
+  playfulBounce: (phase) => ({
+    hipsRotY: Math.sin(phase * 0.9) * 0.018,
+    hipsRotZ: Math.sin(phase * 0.7) * 0.01,
+    spineRotX: Math.sin(phase * 1.2) * 0.015,
+    leftArmRotZ: -1.18 + Math.sin(phase * 0.8) * 0.035,
+    rightArmRotZ: 1.18 - Math.sin(phase * 0.6) * 0.035,
+    headRotY: Math.sin(phase * 0.85) * 0.05,
+    headRotX: Math.sin(phase * 1.1) * 0.025,
+    headRotZ: Math.sin(phase) * 0.02,
+  }),
+};
+
+// Smooth interpolation between two poses
+function lerpPose(poseA, poseB, t) {
+  const result = {};
+  for (const key of Object.keys(poseA)) {
+    const a = poseA[key] || 0;
+    const b = poseB[key] || 0;
+    result[key] = a + (b - a) * t;
+  }
+  return result;
+}
+
 function updateOrganicIdle(delta) {
   if (!vrm) return;
   
-  organicIdleTime += delta;
+  loopTime += delta;
+  
+  // Determine current phase (0-3) and position within phase
+  const totalLoop = PHASE_DURATION * 4;
+  const loopPosition = loopTime % totalLoop;
+  const phaseIndex = Math.floor(loopPosition / PHASE_DURATION);
+  const phaseProgress = (loopPosition % PHASE_DURATION) / PHASE_DURATION;
   
   const hips = vrm.humanoid?.getNormalizedBoneNode('hips');
   const spine = vrm.humanoid?.getNormalizedBoneNode('spine');
@@ -80,38 +143,45 @@ function updateOrganicIdle(delta) {
   const leftLowerArm = vrm.humanoid?.getNormalizedBoneNode('leftLowerArm');
   const rightLowerArm = vrm.humanoid?.getNormalizedBoneNode('rightLowerArm');
   
-  // Base breathing (1.2s cycle)
-  const breathCycle = organicIdleTime * 1.2;
-  const breathY = Math.sin(breathCycle) * 0.004;
-  const breathChest = Math.sin(breathCycle) * 0.015;
+  // Calculate poses
+  const phase = loopTime;
+  const poseKeys = ['gentleSway', 'thoughtfulTilt', 'confidentPose', 'playfulBounce'];
+  const currentPoseKey = poseKeys[phaseIndex];
+  const nextPoseKey = poseKeys[(phaseIndex + 1) % 4];
   
-  // Slow organic drift
-  const drift1 = organicIdleTime * 0.3;
-  const drift2 = organicIdleTime * 0.5;
-  const drift3 = organicIdleTime * 0.2;
+  const currentPose = POSES[currentPoseKey](phase);
+  const nextPose = POSES[nextPoseKey](phase);
   
+  // Smooth transition (blend last 25% of each phase into next)
+  let blendT = phaseProgress;
+  if (blendT > 0.75) {
+    // Ease into next pose during last 25%
+    const transitionProgress = (blendT - 0.75) / 0.25;
+    blendT = transitionProgress;
+  } else {
+    blendT = 0;
+  }
+  
+  const pose = lerpPose(currentPose, nextPose, blendT);
+  
+  // Apply pose
   if (hips) {
-    hips.position.y = breathY;
-    hips.rotation.y = Math.sin(drift3) * 0.008;
-    hips.rotation.z = Math.sin(drift3 * 0.7) * 0.003;
+    hips.rotation.y = pose.hipsRotY || 0;
+    hips.rotation.z = pose.hipsRotZ || 0;
   }
-  if (spine) spine.rotation.x = breathChest * 0.3;
-  if (chest) chest.rotation.x = breathChest;
+  if (spine) spine.rotation.x = pose.spineRotX || 0;
+  // Chest and breathing
+  const breathCycle = loopTime * 1.2;
+  if (chest) chest.rotation.x = (pose.spineRotX || 0) + Math.sin(breathCycle) * 0.015;
   if (head) {
-    head.rotation.y = Math.sin(drift2) * 0.025 + Math.sin(drift2 * 0.6) * 0.015;
-    head.rotation.x = Math.sin(drift2 * 0.8) * 0.012 - 0.02;
-    head.rotation.z = Math.sin(drift1 * 0.5) * 0.008;
+    head.rotation.y = pose.headRotY || 0;
+    head.rotation.x = pose.headRotX || 0;
+    head.rotation.z = pose.headRotZ || 0;
   }
-  if (leftUpperArm) {
-    leftUpperArm.rotation.z = -1.15 + Math.sin(drift1) * 0.02;
-    leftUpperArm.rotation.x = Math.sin(drift2 * 0.6) * 0.015;
-  }
-  if (rightUpperArm) {
-    rightUpperArm.rotation.z = 1.15 - Math.sin(drift1) * 0.02;
-    rightUpperArm.rotation.x = Math.sin(drift2 * 0.6) * 0.015;
-  }
-  if (leftLowerArm) leftLowerArm.rotation.z = 0.05 + Math.sin(drift1 * 1.2) * 0.01;
-  if (rightLowerArm) rightLowerArm.rotation.z = -0.05 - Math.sin(drift1 * 1.2) * 0.01;
+  if (leftUpperArm) leftUpperArm.rotation.z = pose.leftArmRotZ || -1.2;
+  if (rightUpperArm) rightUpperArm.rotation.z = pose.rightArmRotZ || 1.2;
+  if (leftLowerArm) leftLowerArm.rotation.z = 0.05;
+  if (rightLowerArm) rightLowerArm.rotation.z = -0.05;
   
   // Blinking
   blinkTimer += delta;
