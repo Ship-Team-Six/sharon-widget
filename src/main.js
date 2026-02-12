@@ -334,15 +334,38 @@ function startIdleAnimation() {
 }
 
 function pickNextIdle() {
-  // Pick different from current
-  let next;
-  do {
-    next = Math.floor(Math.random() * IDLE_ANIMATIONS.length);
-  } while (next === animationState.currentIdleIndex && IDLE_ANIMATIONS.length > 1);
+  // SEQUENTIAL: Go through animations in order instead of random
+  const next = (animationState.currentIdleIndex + 1) % IDLE_ANIMATIONS.length;
   
   animationState.currentIdleIndex = next;
   animationState.idleTimer = 0;
-  console.log('Switched to idle animation:', IDLE_ANIMATIONS[next].name);
+  console.log('🎭 Sequential switch to idle:', IDLE_ANIMATIONS[next].name);
+}
+
+// Reset all bones to default pose
+function resetToDefaultPose() {
+  if (!vrm) return;
+  
+  const hips = vrm.humanoid?.getNormalizedBoneNode('hips');
+  const spine = vrm.humanoid?.getNormalizedBoneNode('spine');
+  const chest = vrm.humanoid?.getNormalizedBoneNode('chest');
+  const head = vrm.humanoid?.getNormalizedBoneNode('head');
+  const leftUpperArm = vrm.humanoid?.getNormalizedBoneNode('leftUpperArm');
+  const rightUpperArm = vrm.humanoid?.getNormalizedBoneNode('rightUpperArm');
+  const leftLowerArm = vrm.humanoid?.getNormalizedBoneNode('leftLowerArm');
+  const rightLowerArm = vrm.humanoid?.getNormalizedBoneNode('rightLowerArm');
+  
+  if (hips) {
+    hips.position.y = 0;
+    hips.rotation.set(0, 0, 0);
+  }
+  if (spine) spine.rotation.set(0, 0, 0);
+  if (chest) chest.rotation.set(0, 0, 0);
+  if (head) head.rotation.set(0, 0, 0);
+  if (leftUpperArm) leftUpperArm.rotation.set(0, 0, -1.2);
+  if (rightUpperArm) rightUpperArm.rotation.set(0, 0, 1.2);
+  if (leftLowerArm) leftLowerArm.rotation.set(0, 0, 0.05);
+  if (rightLowerArm) rightLowerArm.rotation.set(0, 0, -0.05);
 }
 
 // Note: triggerChatAnimation defined below in Chat Animation section
@@ -355,17 +378,20 @@ function updateIdleAnimation(delta) {
   const state = animationState;
   
   // ── Idle Animation Cycling ──
-  // Cycle to next idle animation every 15 seconds
+  // Sequential cycling, only switch when in default pose (at cycle boundaries)
   state.idleTimer += delta;
-  if (state.idleTimer >= state.idleDuration && state.state === ANIMATION_STATE.IDLE) {
+  
+  // Only switch animation when we're at the end AND in the default pose blending zone (>85%)
+  const cycleProgress = state.idleTimer / state.idleDuration;
+  const inDefaultPoseZone = cycleProgress > 0.85;
+  
+  if (state.idleTimer >= state.idleDuration && state.state === ANIMATION_STATE.IDLE && inDefaultPoseZone) {
+    // Reset to default pose first, then switch
+    resetToDefaultPose();
     state.idleTimer = 0;
-    // Pick random next idle (different from current)
-    let nextIndex;
-    do {
-      nextIndex = Math.floor(Math.random() * IDLE_ANIMATIONS.length);
-    } while (nextIndex === state.currentIdleIndex && IDLE_ANIMATIONS.length > 1);
-    state.currentIdleIndex = nextIndex;
-    console.log('🎭 Switched to idle animation:', IDLE_ANIMATIONS[nextIndex].name);
+    // Sequential: next animation in list
+    state.currentIdleIndex = (state.currentIdleIndex + 1) % IDLE_ANIMATIONS.length;
+    console.log('🎭 Sequential switch to idle:', IDLE_ANIMATIONS[state.currentIdleIndex].name);
   }
   
   // Get current idle animation
@@ -373,8 +399,7 @@ function updateIdleAnimation(delta) {
   const idlePhase = state.bodySwayPhase + state.idleTimer;
   const rawIdlePose = idleAnim.update(delta, idlePhase);
   
-  // Smooth blending at start AND end of cycle for seamless transitions
-  const cycleProgress = state.idleTimer / state.idleDuration;
+  // (cycleProgress already defined above for cycling logic)
   
   // Blend FROM default at start (first 15%) AND TO default at end (last 15%)
   let blendFactor = 0;
@@ -711,10 +736,16 @@ function updateTwirlAnimation(delta) {
       vrm.expressionManager.setValue('blink', 0);
     }
     
-    // Reset head
+    // Reset head completely (all axes)
     if (head) {
+      head.rotation.x = 0;
+      head.rotation.y = (1 - ease) * state.twirlRotation; // Unwind any rotation
       head.rotation.z = (1 - ease) * 0.1;
     }
+    
+    // Reset spine and chest too
+    if (spine) spine.rotation.x = 0;
+    if (chest) chest.rotation.x = 0;
     
     if (returnProgress >= 1) {
       state.state = ANIMATION_STATE.IDLE;
@@ -722,6 +753,8 @@ function updateTwirlAnimation(delta) {
       state.twirlRotation = 0;
       state.wasDragged = false;
       state.idleTimer = 0;
+      // Force reset all bones to default
+      resetToDefaultPose();
       console.log('🎭 Twirl sequence complete, back to idle!');
     }
   }
